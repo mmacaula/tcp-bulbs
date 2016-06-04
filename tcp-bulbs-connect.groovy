@@ -322,13 +322,7 @@ def apiPost(String data, Integer retryCount = 0, Closure callback) {
                 debugOut ("Return Code = ${rc} = Command Succeeded.")
                 callback.call(response)
 
-            } else if ( rc == "401" ) {
-                debugOut "Return Code = ${rc} = Error: User not logged in!" //Error code from gateway
-                log.debug "Refreshing Token"
-                getToken()
-                //callback.call(response) //stubbed out so getToken works (we had race issue)
-
-            } else if ( rc == "400" || rc== "500" ) {
+            }  else if ( rc.startsWith("4") || rc.startsWith("5") ) {
                 debugOut "Return Code = ${rc} = Error: Something happened!" //Error code from gateway
                 sendNotificationEvent("Return Code = ${rc} = Error: Something happened!  Retry # ${retryCount}" )
                 log.debug "Refreshing Token"
