@@ -12,3 +12,6 @@ To use:
 5.  Paste the code from `tcp-bulb.groovy` in there and "publish" for 'me'
 6.  Install this app:   Go to "marketplace" -> "SmartApps" -> "My Apps" -> and select "TCP Bulbs - more reliable"
 7.  Go on as before.  Submit any issues you find here as an 'issue'.  
+
+## Credit
+Most credit goes to Todd Wackford who made the original app.  I only updated it to fix some issues I was having.  I hope it's useful to others.
