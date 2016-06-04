@@ -19,9 +19,9 @@ import java.security.MessageDigest;
 private apiUrl() { "https://tcp.greenwavereality.com/gwr/gop.php?" }
 
 definition(
-    name: "Tcp Bulbs (Connect)",
-    namespace: "wackford",
-    author: "SmartThings",
+    name: "TCP Bulbs - more reliable",
+    namespace: "mmacaula",
+    author: "Mike Macaulay",
     description: "Connect your TCP bulbs to SmartThings using Cloud to Cloud integration. You must create a remote login acct on TCP Mobile App.",
     category: "SmartThings Labs",
     iconUrl: "https://s3.amazonaws.com/smartapp-icons/Partner/tcp.png",
@@ -54,9 +54,8 @@ def installed() {
 
     setupBulbs()
 
-    def cron = "0 11 23 * * ?"
-    log.debug "schedule('$cron', syncronizeDevices)"
-    schedule(cron, syncronizeDevices)
+    log.debug "schedule every 5 minutes syncronizeDevices)"
+    runEvery5Minutes(syncronizeDevices)
 }
 
 def updated() {
@@ -66,9 +65,8 @@ def updated() {
 
     setupBulbs()
 
-    def cron = "0 11 23 * * ?"
-    log.debug "schedule('$cron', syncronizeDevices)"
-    schedule(cron, syncronizeDevices)
+    log.debug "schedule update every 5 minutes syncronizeDevices)"
+    runEvery5Minutes(syncronizeDevices)
 }
 
 def uninstalled()
@@ -112,7 +110,6 @@ def setupBulbs() {
 
     def bulbs = state.devices
     def deviceFile = "TCP Bulb"
-
 
     selectedBulbs.each { did ->
         //see if this is a selected bulb and install it if not already
@@ -184,7 +181,7 @@ def deviceDiscovery() {
     def cmd = toQueryString(Params)
 
     def rooms = ""
-
+    log.debug 'trying to discover devices'
     apiPost(cmd) { response ->
         rooms = response.data.gip.room
     }
@@ -271,7 +268,7 @@ def getGatewayData() {
 
 }
 
-def getToken() {
+def getToken(Closure callback) {
 
     atomicState.token = ""
 
@@ -299,6 +296,9 @@ def getToken() {
                 atomicState.token = "error"
             } else {
                 atomicState.token = response.data.gip.token
+                if(callback){
+                    callback.call()
+                }
             }
         }
     } else {
@@ -307,8 +307,8 @@ def getToken() {
     }
 }
 
-def apiPost(String data, Closure callback) {
-    //debugOut "In apiPost with data: ${data}"
+def apiPost(String data, Integer retryCount = 0, Closure callback) {
+    debugOut "In apiPost with data: ${data}"
     def params = [
         uri: apiUrl(),
         body: data
@@ -326,6 +326,23 @@ def apiPost(String data, Closure callback) {
                 debugOut "Return Code = ${rc} = Error: User not logged in!" //Error code from gateway
                 log.debug "Refreshing Token"
                 getToken()
+                //callback.call(response) //stubbed out so getToken works (we had race issue)
+
+            } else if ( rc == "400" || rc== "500" ) {
+                debugOut "Return Code = ${rc} = Error: Something happened!" //Error code from gateway
+                sendNotificationEvent("Return Code = ${rc} = Error: Something happened!  Retry # ${retryCount}" )
+                log.debug "Refreshing Token"
+                 if(retryCount > 5){
+                    // give up, send a notification
+                    sendNotificationEvent("TCP Lighting is having Communication Errors. Error code = ${rc}. Gave up after ${retryCount} tries")
+                }
+                getToken({  ->
+                    def updatedTokenData = data.replaceFirst("<token>[^<]*</token>", '<token>${atomicState.token}</token>')
+                    // try again if we got our token
+                    sendNotificationEvent('re-fetched token, trying again')
+
+                    apiPost(updatedTokenData, retryCount++, callback)
+                })
                 //callback.call(response) //stubbed out so getToken works (we had race issue)
 
             } else {
@@ -421,6 +438,8 @@ def syncronizeDevices() {
             poll(dni)
         }
     }
+    getToken()
+
 }
 
 boolean isRoom(dni) {
@@ -444,7 +463,7 @@ def debugEvent(message, displayEvent) {
 }
 
 def debugOut(msg) {
-    //log.debug msg
+    log.debug msg
     //sendNotificationEvent(msg) //Uncomment this for troubleshooting only
 }
 
@@ -631,35 +650,36 @@ def poll(childDevice) {
 
     apiPost(cmd) { response ->
         bulbData = response.data.gip
+        debugOut "This Bulbs Data Return = ${bulbData}"
+
+        def bulb = getChildDevice( dni )
+
+        //set the devices power max setting to do calcs within the device type
+        if ( bulbData.other.bulbpower )
+            sendEvent( dni, [name: "setBulbPower",value:"${bulbData.other.bulbpower}"] )
+
+        if (( bulbData.state == "1" ) && ( bulb?.currentValue("switch") != "on" ))
+            sendEvent( dni, [name: "switch",value:"on"] )
+
+        if (( bulbData.state == "0" ) && ( bulb?.currentValue("switch") != "off" ))
+            sendEvent( dni, [name: "switch",value:"off"] )
+
+        //if ( bulbData.level != bulb?.currentValue("level")) {
+        //    sendEvent( dni, [name: "level",value: "${bulbData.level}"] )
+        //    sendEvent( dni, [name: "setLevel",value: "${bulbData.level}"] )
+        //}
+
+        if (( bulbData.state == "1" ) && ( bulbData.other.bulbpower )) {
+            def levelSetting = bulbData.level as float
+            def bulbPowerMax = bulbData.other.bulbpower as float
+            def calculatedPower = bulbPowerMax * (levelSetting / 100)
+            sendEvent( dni, [name: "power", value: calculatedPower.round(1)] )
+        }
+
+        if (( bulbData.state == "0" ) && ( bulbData.other.bulbpower ))
+            sendEvent( dni, [name: "power", value: 0.0] )
+
     }
 
-    debugOut "This Bulbs Data Return = ${bulbData}"
 
-    def bulb = getChildDevice( dni )
-
-    //set the devices power max setting to do calcs within the device type
-    if ( bulbData.other.bulbpower )
-        sendEvent( dni, [name: "setBulbPower",value:"${bulbData.other.bulbpower}"] )
-
-    if (( bulbData.state == "1" ) && ( bulb?.currentValue("switch") != "on" ))
-        sendEvent( dni, [name: "switch",value:"on"] )
-
-    if (( bulbData.state == "0" ) && ( bulb?.currentValue("switch") != "off" ))
-        sendEvent( dni, [name: "switch",value:"off"] )
-
-    //if ( bulbData.level != bulb?.currentValue("level")) {
-    //    sendEvent( dni, [name: "level",value: "${bulbData.level}"] )
-    //    sendEvent( dni, [name: "setLevel",value: "${bulbData.level}"] )
-    //}
-
-    if (( bulbData.state == "1" ) && ( bulbData.other.bulbpower )) {
-        def levelSetting = bulbData.level as float
-        def bulbPowerMax = bulbData.other.bulbpower as float
-        def calculatedPower = bulbPowerMax * (levelSetting / 100)
-        sendEvent( dni, [name: "power", value: calculatedPower.round(1)] )
-    }
-
-    if (( bulbData.state == "0" ) && ( bulbData.other.bulbpower ))
-        sendEvent( dni, [name: "power", value: 0.0] )
 }
-
